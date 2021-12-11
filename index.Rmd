@@ -46,92 +46,243 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Junqi Wen, JW53338
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+CPSSW8 is taken from the Bureau of Labor Statistic in the US Department of Labor. The aim is to provides data on labor force that characterize the population. The dataset contains 5 different variables with a total of 61395 observations for each group which is a result of randomized survey conducted by the U.S. Department of Labor. The main variable includes education which ranks someone from the degree of 1-20 measuring the individual's education, earnings on an hourly metric for financial wealth, age in years, region that are separated into four unique category, and last not the least, the gender by female and male. Therefore, the idea of this project is the though of, is machine learning able to classify gender or if there even is a difference in gender distribution for earnings, age, and education. 
 
 ```{R}
 library(tidyverse)
 # read your datasets in here, e.g., with read_csv()
 
-# if your dataset needs tidying, do so here
+# I am taking a portion (1000) of the dataset in this scenaro on a random selection to reduce the run-time needed for computation
+set.seed(1234)
+data1 <- read_csv("CPSSW8.csv")
+sample1 <- data1 %>% sample_n(1000)
+sample1 <- sample1 %>% select(-X1)
 
-# any other code here
+
+# if your dataset needs tidying, do so here
+sample1$gender <- as.factor(sample1$gender)
+sample1$region <- as.factor(sample1$region)
+
 ```
 
 ### Cluster Analysis
 
 ```{R}
 library(cluster)
-# clustering code here
+library(GGally)
+
+set.seed(1234)
+sil_width <- vector()
+
+#Using Gower index for categorical data 
+gower1 <- daisy(sample1,metric="gower")
+
+for (i in 2:10){
+  pam_fit <- pam(gower1, diss = T, k=i)
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+
+plot(1:10,sil_width)
+
+# Here I understand that we ave to pick the number of cluster with the highest silhoutte width, but it is not-ideal to use 10 clusters. Therefore, 3 was used after looking at the graph
+pam_fit<- gower1 %>% pam(k=3, diss = T) 
+
+sample1 %>% slice(pam_fit$id.med)
+pam_fit$silinfo$avg.width
+
+sample1 <- sample1 %>%
+  mutate(cluster = factor (pam_fit$clustering))
+
+ggpairs(sample1, cols= 1:6, aes(color=cluster))
 ```
 
-Discussion of clustering here
+* Looking at the overall cluster analysis, the first thing is that silhouette width is 0.54, the interpretation implies that a reasonable structure has been found. When looking at the ggpair plot, we can see that the majoirty of cluster1(green) can be view as female, relatively diverse age, and also with a education at a lower end scale. The second group (Blue), cosist of male, who are in the relatively young age with lower to mid earnings given medium education. While the last group consist of male, who are relatively older in age, and have higher earning given higher education. 
     
     
 ### Dimensionality Reduction with PCA
 
 ```{R}
 # PCA code here
+library(factoextra)
+numeric1 <- sample1 %>% select(earnings, age, education)
+princomp(numeric1, cor=T) -> CPSS_pca
+
+eigval<-CPSS_pca$sdev^2 #square to convert SDs to eigenvalues
+varprop=round(eigval/sum(eigval), 2) #proportion of var explained by each PC.
+
+fviz_pca_biplot(CPSS_pca)
+
+round(cumsum(eigval)/sum(eigval), 2) 
+summary(CPSS_pca, loadings = T)
+
+CPSS_pcadf <- CPSS_pca$scores %>% as.data.frame() %>%
+  mutate(gender = sample1$gender)
+#CPSS_pca_df %>% bind_cols(Genders = )
+CPSS_pcadf %>% ggplot(aes(Comp.1, Comp.2, color = gender)) + geom_point()
+
+
 ```
 
-Discussions of PCA here. 
+
+* Looking at the PCA analysis, we will hit 82% of the total variance on 2 components.In this scenario, Principal Component 1 shows that if you have a high principal component 1, it tends to have an increase in all variables with the most significant increase in earnings and education. Vice Versa, if you have a low principal component, it tends to have a low score for earning, age, and education as well. While in component 2, if you score high on y axis, you tend to have more education and earnings with incremental less than component 1, but also be younger in the population. Lastly, a high PC3 values shows an increase in earning, decrease in age, and decrease in education. Another fun fact is looking at the component comparison graph, it seems that male dominated in both high end Comp1 and Comp 2 to the top right side of the corner.
 
 ###  Linear Classifier
 
 ```{R}
 # linear classifier code here
+
+sample2 <- sample1 %>% select(-region, -cluster)
+
+logistic_fit <- glm(gender == "male" ~ ., data=sample2, family="binomial")
+prob_reg <- predict(logistic_fit, type = "response")
+class_diag(prob_reg, sample2$gender, positive = "male")
+
 ```
 
 ```{R}
 # cross-validation of linear classifier here
+set.seed(222)
+k=10
+
+data<-sample_frac(sample2) #randomly order rows
+folds <- rep(1:k, length.out=nrow(data)) #create folds
+diags<-NULL
+
+i=1
+for(i in 1:k){
+# create training and test sets
+train<-data[folds!=i,] 
+test<-data[folds==i,] 
+truth<-test$gender
+
+# train model
+#fit <- glm(Legendary~ -name,., data = train, family = "binomial")
+fit <- glm(gender~., data = train, family = "binomial")
+  
+# test model
+probs <- predict(fit, newdata = test, type = "response")
+
+# get performance metrics for each fold
+diags<-rbind(diags,class_diag(probs,truth, positive = "male")) }
+
+#average performance metrics across all folds
+summarize_all(diags,mean)
 ```
 
-Discussion here
+* In the linear classification method, I created a new value named sample2 as variables that only contain numeric information. The AUC is performing at a Poor level for classifying genders between female and male. Which make sense since it will be bad if the classier is able to classify genders based off earning, education, and age alone. But looking at the cross-validation portion, this specific method showed just a tiny bit less auc then out of sample porportion which means overfitting is not an issue 
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
-# non-parametric classifier code here
+knn_fit <- knn3(gender == "male" ~., data=sample2)
+
+y_hat_knn <- predict(knn_fit, sample2)[,2]
+
+class_diag(y_hat_knn, sample2$gender, positive = "male")
 ```
 
 ```{R}
 # cross-validation of np classifier here
+set.seed(222)
+k=10
+
+data<-sample_frac(sample2) #randomly order rows
+folds <- rep(1:k, length.out=nrow(data)) #create folds
+diags<-NULL
+
+i=1
+for(i in 1:k){
+# create training and test sets
+train<-data[folds!=i,] 
+test<-data[folds==i,] 
+truth<-test$gender 
+
+# train model
+fit_knn <- knn3(gender ~., data = train)
+
+# test model
+probs_knn <- predict(fit_knn, newdata = test)[,2]
+
+# get performance metrics for each fold
+diags<-rbind(diags,class_diag(probs_knn,truth, positive = "male")) }
+
+#average performance metrics across all folds
+summarize_all(diags,mean)
+
 ```
 
-Discussion
+*The out of sample k-fold testing showed a promising auc score level of 0.7788 which symbolizes fair classification in predicting new observation. Unfortunately, we also see a significant decrease in auc by almost 0.198 through cross validation. THerefore, signs of overfilling does exist using the k-fold testing which most likely is due to the k-cluster application that the model faces.
 
 
 ### Regression/Numeric Prediction
 
 ```{R}
-# regression model code here
+sample3 <- sample2 %>% select(-gender)
+Numeric_fit <- lm(earnings~ ., data=sample3)
+yhat <- predict(Numeric_fit)
+
+mean((sample3$earnings-yhat)^2)
 ```
 
 ```{R}
 # cross-validation of regression model here
+set.seed(1234)
+k=10 #choose number of folds
+data<-sample3[sample(nrow(sample3)),] #randomly order rows
+folds<-cut(seq(1:nrow(sample3)),breaks=k,labels=F) #create folds
+
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,]
+  test<-data[folds==i,]
+  ## Fit linear regression model to training set
+  fit<-lm(earnings~.,data=train)
+  ## Get predictions/y-hats on test set (fold i)
+  yhat<-predict(fit,newdata=test)
+  ## Compute prediction error  (MSE) for fold i
+  diags<-mean((test$earnings-yhat)^2) 
+}
+mean(diags)
+
 ```
 
-Discussion
+* Through the use of numeric prediction through linear regression, we see a mean squared error of 78.98079. The MSE in this scenario is relatively large in this scenario which means the use of linear regression may not be the best tools to predict earnings based on gender and education alone. The cross-validation showed a very similar result with a MSE of 79.24075 which symbolizes no overfitting of the data.
 
 ### Python 
 
 ```{R}
 library(reticulate)
+use_python("/usr/bin/python3")
+plot <- import("matplotlib")
+plot$use("Agg", force = TRUE)
 ```
 
 ```{python}
 # python code here
+sample_earnings = r.sample1['earnings']
+
+max_earnings = str(round(sample_earnings.max(),3))
+min_earnings = str(round(sample_earnings.min(),3))
+std_earnings = str(round(sample_earnings.std(),3))
+
+print("Max earning is " + max_earnings + " dollars an hour")
+print("Min earning is " + min_earnings + " dollars an hour")
+print("Standard Deviation of earning " + std_earnings + " dollars an hour")
+
 ```
 
-Discussion
+* Using the max function through python, we can see the distribution of earnings is having a max of 60.096 and a minimum earning of 2.098 dollars per hour in the distribution. This shows how sparse the earning variable are in the overall dataset and there is a large difference between the min and max earning of the sample population
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+After analyzing at the data, it becomes apparent that it is not very easy to predict gender based solely on education, earnings, and age alone. Although through clustering, we can vaguely see that the male tends to dominates the high earning, high education part of the scatter plot, but since the the dataset is so sparse in distribution, it's hard to fit a good model in predicting gender with the numeric/categorical value provided.
+
+If we were have to choose one, I would say using the linear classifier would be our best options since it gives us the highest AUC with no signs of overfitting. In my opinion, the limitation in prediction is a result to the lack of data provided by the U.S. department of Labor. If more variables are introduced such as name which can be a great source of classifier. For example, we will know someone named "Sarah" is most likely female, while someone named "James" is most likely male. 
 
 
 
